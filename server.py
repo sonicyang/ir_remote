@@ -7,9 +7,13 @@ import _thread
 import socket
 import time
 
+from hvac_ircontrol.ir_sender import LogLevel
+from hvac_ircontrol.mitsubishi import Mitsubishi, ClimateMode, FanMode, VanneVerticalMode, AreaMode
+
 app = Flask(__name__)
 api = Api(app)
 
+lirc_stat = subprocess.call(["service", "lircd", "status"])
 remotes = {}
 ac_stat = {}
 ac_stat_range = {}
@@ -52,7 +56,18 @@ def server_broadcaster():
         broadcastSocket.sendto(str(IP).encode("UTF-8"), ('<broadcast>', 10000))
         time.sleep(5)
 
+def start_lirc():
+    if lirc_stat == 3:
+        subprocess.call(["service", "lircd", "start"])
+        lirc_stat = 0
+
+def stop_lirc():
+    if lirc_stat == 0:
+        subprocess.call(["service", "lircd", "stop"])
+        lirc_stat = 3
+
 def create_resources():
+    start_lirc()
     try:
         raw_remote_list = subprocess.check_output(["irsend", "LIST", '', '']).decode("UTF-8").split("\n")
         remote_list = list(filter(lambda y: y != "", filter(lambda x: x != "devinput", raw_remote_list)))
@@ -72,6 +87,8 @@ class RemoteList(Resource):
 
 class Remote(Resource):
     def put(self, remote_name, key_name):
+        start_lirc()
+
         if subprocess.call(["irsend", "SEND_ONCE", remote_name, key_name]):
             return "FAILED", 500
         else:
@@ -79,90 +96,55 @@ class Remote(Resource):
 
 class AC(Resource):
     def __send_ir_command__(self):
-        pre_bytes = [0b11000100, 0b11010011, 0b01100100, 0b10000000, 0b00000000]
-        data_bytes = [None] * 8
-        crc = 0
-
         power = ac_stat["power"]
         temp = ac_stat["temp"]
         mode = ac_stat["mode"]
         speed = ac_stat["speed"]
         direction = ac_stat["dir"]
 
-        if power == "on":
-            data_bytes[0] = 0b00100100
-        elif power == "off":
-            data_bytes[0] = 0b00000100
-
-        data_bytes[2] = int('{0:04b}'.format(31 - temp)[2:][::-1] + "0000", 2)
-
         if mode == "dry":
-            data_bytes[1] = 0b01000000
-            data_bytes[2] = 0b11100000 # dry use fix value on temp
+            cm = ClimateMode.Dry
         elif mode == "heat":
-            data_bytes[1] = 0b10000000
+            cm = ClimateMode.Hot
         elif mode == "cool":
-            data_bytes[1] = 0b11000000
+            cm = ClimateMode.Cold
 
-        data_bytes[3] = 0b00000000
-        if speed == "1":
-            data_bytes[3] |= 0b01000000
+        if speed == "auto":
+            sp = FanMode.Auto
+        elif speed == "1":
+            sp = FanMode.Speed1
         elif speed == "2":
-            data_bytes[3] |= 0b11000000
+            sp = FanMode.Speed2
         elif speed == "3":
-            data_bytes[3] |= 0b10100000
+            sp = FanMode.Speed3
 
-        if direction != "auto":
-            data_bytes[3] |= int('{0:03b}'.format(int(direction))[::-1] + "00", 2)
+        if direction == "auto":
+            dr = VanneVerticalMode.Auto
+        elif direction == "1":
+            dr = VanneVerticalMode.Top
+        elif direction == "2":
+            dr = VanneVerticalMode.MiddleTop
+        elif direction == "3":
+            dr = VanneVerticalMode.Middle
+        elif direction == "4":
+            dr = VanneVerticalMode.MiddleDown
+        elif direction == "5":
+            dr = VanneVerticalMode.Down
 
-        data_bytes[4] = data_bytes[5] = data_bytes[6] = data_bytes[7] = 0
+        stop_lirc()
 
-        payload = pre_bytes + data_bytes
-        crc = reduce(lambda x, y: x + y, map(lambda x: int(x[::-1], 2), map(lambda x: '{0:08b}'.format(x), payload)))
-        # crc = int([-8:][::-1], 2)
-        crc = bin(crc)[2:].zfill(8)
-        crc = int(crc[-8:], 2)
+        HVAC = Mitsubishi(17, LogLevel.ErrorsOnly)
+        if power == "on":
+            HVAC.send_command(
+                climate_mode=cm,
+                temperature=temp,
+                fan_mode=sp,
+                vanne_vertical_mode=dr
+                )
+        elif power == "off":
+            HVAC.power_off()
 
-        payload += [crc]
-        print(list(map(lambda x: '{0:08b}'.format(x), payload)))
-        pre_flat = "0x" + reduce(lambda x, y: x + y, map(lambda z: '{0:02x}'.format(z), payload[:5]))
-        flat = "0x" + reduce(lambda x, y: x + y, map(lambda z: '{0:02x}'.format(z), payload[5:-1]))
-        post_flat = "0x" + reduce(lambda x, y: x + y, map(lambda z: '{0:02x}'.format(z), payload[-1:]))
-
-        with open("/etc/lirc/lircd.conf.d/AC.lircd.conf", "w") as fil:
-            fil.write("""
-begin remote
-
-   name  ac
-   bits           64
-   flags SPACE_ENC|CONST_LENGTH
-   eps            30
-   aeps          100
-
-   header       3500  1700
-   one           450  1250
-   zero          450   450
-   pre_data_bits   40
-   pre_data       0xC4D3648000
-   post_data_bits   8
-   post_data       """ + post_flat + """
-   ptrail 450
-   gap          500000
-   toggle_bit_mask 0x0
-   frequency    38000
-
-       begin codes
-           key_unknown              """ + flat + """
-       end codes
-
-end remote
-                    """)
-
-        subprocess.call(["service", "lircd", "restart"])
-        if not subprocess.call(["irsend", "SEND_ONCE", "ac", "key_unknown"]):
-            return True
-        else:
-            return False
+        return True
 
     def get(self):
         return ac_stat

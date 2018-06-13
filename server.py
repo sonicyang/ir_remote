@@ -3,7 +3,7 @@ from flask_restful import Resource, Api, reqparse
 from contextlib import suppress
 import subprocess
 from functools import reduce
-import thread
+import _thread
 import socket
 import time
 
@@ -49,8 +49,9 @@ def server_broadcaster():
     broadcastSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     while work:
-        broadcastSocket.sendto(str(IP), ('<broadcast>', 5001))
-        time.sleep(1)
+        broadcastSocket.sendto(str(IP).encode("UTF-8"), ('<broadcast>', 10000))
+        time.sleep(5)
+
 def create_resources():
     try:
         raw_remote_list = subprocess.check_output(["irsend", "LIST", '', '']).decode("UTF-8").split("\n")
@@ -197,7 +198,7 @@ api.add_resource(Remote, '/remote/<string:remote_name>/<string:key_name>')
 api.add_resource(AC, '/ac')
 
 if __name__ == '__main__':
-    thread.start_new_thread(server_broadcaster, ())
+    _thread.start_new_thread(server_broadcaster, ())
     if not create_resources():
         print("Failed to construct a list of remotes")
         exit(1)

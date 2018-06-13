@@ -3,6 +3,9 @@ from flask_restful import Resource, Api, reqparse
 from contextlib import suppress
 import subprocess
 from functools import reduce
+import thread
+import socket
+import time
 
 app = Flask(__name__)
 api = Api(app)
@@ -24,16 +27,43 @@ __add_stat__("temp", 26, ["up", "down"])
 __add_stat__("speed", "auto", ["auto", "1", "2", "3"])
 __add_stat__("dir", "auto", ["auto", "1", "2", "3", "4", "5"])
 
+def get_IP():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
 
+work = True
+def server_broadcaster():
+    global work
+    IP = get_IP()
+
+    broadcastSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    broadcastSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    broadcastSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    while work:
+        broadcastSocket.sendto(str(IP), ('<broadcast>', 5001))
+        time.sleep(1)
 def create_resources():
-    raw_remote_list = subprocess.check_output(["irsend", "LIST", '', '']).decode("UTF-8").split("\n")
-    remote_list = list(filter(lambda y: y != "", filter(lambda x: x != "devinput", raw_remote_list)))
+    try:
+        raw_remote_list = subprocess.check_output(["irsend", "LIST", '', '']).decode("UTF-8").split("\n")
+        remote_list = list(filter(lambda y: y != "", filter(lambda x: x != "devinput", raw_remote_list)))
 
-    for remote in remote_list:
-        raw_cmds = filter(lambda x: x != "", subprocess.check_output(["sudo", "irsend", "LIST", remote, ""]).decode("UTF-8").split("\n"))
-        cmd_list = list(map(lambda x: x.split(" ")[1], raw_cmds))
+        for remote in remote_list:
+            raw_cmds = filter(lambda x: x != "", subprocess.check_output(["sudo", "irsend", "LIST", remote, ""]).decode("UTF-8").split("\n"))
+            cmd_list = list(map(lambda x: x.split(" ")[1], raw_cmds))
 
-        remotes[remote] = cmd_list
+            remotes[remote] = cmd_list
+    except Exception:
+        return False
+    return True
 
 class RemoteList(Resource):
     def get(self):
@@ -167,6 +197,9 @@ api.add_resource(Remote, '/remote/<string:remote_name>/<string:key_name>')
 api.add_resource(AC, '/ac')
 
 if __name__ == '__main__':
-    # create_resources()
+    thread.start_new_thread(server_broadcaster, ())
+    if not create_resources():
+        print("Failed to construct a list of remotes")
+        exit(1)
     app.run(host="0.0.0.0", debug=True)
-
+    work = False

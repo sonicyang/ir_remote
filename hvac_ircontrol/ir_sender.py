@@ -201,7 +201,7 @@ class RC5():
 # i.e. instead of trying to figure out the protocol, simply define bit lengths and send them all here.
 class RAW():
     def __init__(self,
-                master, 
+                master,
                 log_level = LogLevel.Minimal,
                 frequency=36000,
                 duty_cycle=0.33,
@@ -242,7 +242,7 @@ class RAW():
 class IrSender():
     def __init__(self, gpio_pin, protocol, protocol_config, log_level = LogLevel.Minimal):
         self.log_level = log_level
-        
+
         self.__log(LogLevel.Minimal, "Starting IR")
         self.__log(LogLevel.Normal, "Loading libpigpio.so")
         self.pigpio = ctypes.CDLL('libpigpio.so')
@@ -310,7 +310,7 @@ class IrSender():
         self.__log(LogLevel.Minimal, "Sending data %s:" % ("inverted " if mustInvert else ""))
         self.__log(LogLevel.Minimal, (' '.join('{:x}'.format(d) for d in data)).upper())
         # Send all Bits from Byte Data in Reverse Order
-        for i in xrange(0, len(data)):
+        for i in range(0, len(data)):
             idx = i if mustInvert else (len(data) - i - 1)
             mask = 1
             while mask < maxMask and mask > 0:
